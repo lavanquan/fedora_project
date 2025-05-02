@@ -90,15 +90,16 @@ def main(args):
             f.write(f"Gradient Accumulation Steps: {args.gradient_accumulation_steps}\n")
         if args.fp16:
             f.write(f"Mixed Precision Training: Enabled\n")
-        f.write("\n")
+        f.write("\n--- Training Start ---\n")
 
         max_acc = 0
         mismatched_max_acc = 0
 
         # Federated learning rounds
-        for round_num in range(args.num_rounds):
-            print(f"\n--- Federated Learning Round {round_num + 1} ---")
-    
+        rounds_iter = tqdm(range(args.num_rounds), desc="Federated Learning Rounds", leave=True, ncols=100, mininterval=1.0)
+        for round_num in rounds_iter:
+            print(f"\n--- Round {round_num + 1}/{args.num_rounds} Starting ---")
+            
             client_models = []
             if "muon" in args.method:
                 processes = []
@@ -106,8 +107,8 @@ def main(args):
                 os.environ['MASTER_PORT'] = str(args.master_port)
 
             # Train each client
+            print("  Starting client training for this round...")
             for client in clients:
-                print(f"\nTraining Client {client.client_id}")
                 if "kd" in args.method:
                     client.train(
                         epochs=args.num_epochs, 
@@ -124,23 +125,32 @@ def main(args):
                         use_fp16=args.fp16
                     )
                 client_models.append(client.get_parameters())
+            print("  Client training finished for this round.")
 
             # Server-side aggregation and evaluation
-            print("\nAggregating client models on the server...")
+            print("\n  Aggregating client models...")
             server.aggregate(client_models)
+            print("  Server aggregation complete.")
             eval_metric = server.evaluate(eval_dataloader, metric=metric)
             
             if "mnli" in args.dataset:
                 mismatched_eval_metric = server.evaluate(mismatched_eval_dataloader, metric=metric)
-            print(eval_metric)
-
+            
             # Update best accuracy
             if max_acc < eval_metric['accuracy']:
                 max_acc = eval_metric['accuracy']
 
             if "mnli" in args.dataset and mismatched_max_acc < mismatched_eval_metric["accuracy"]:
                 mismatched_max_acc = mismatched_eval_metric["accuracy"]
+                
+            # Update progress bar with current metrics
+            round_metrics = {"accuracy": f"{eval_metric['accuracy']:.4f}"}
+            if "mnli" in args.dataset:
+                round_metrics["mismatched"] = f"{mismatched_eval_metric['accuracy']:.4f}"
+            round_metrics["best_acc"] = f"{max_acc:.4f}"
+            rounds_iter.set_postfix(round_metrics)
 
+            print("\n  Updating clients with new global model...")
             # Update clients with new global model
             for client in clients:
                 client.set_parameters(server.global_model.state_dict())
@@ -150,7 +160,8 @@ def main(args):
                 f.write(f"  Global Accuracy after Round {round_num + 1}: {eval_metric['accuracy']:.4f}, {mismatched_eval_metric['accuracy']:.4f}%\n\n")
             else:
                 f.write(f"  Global Accuracy after Round {round_num + 1}: {eval_metric['accuracy']:.4f}%\n\n")
-
+        
+        f.write("\n--- Training End ---\n")
         # Write final results
         if "mnli" in args.dataset:
             f.write(f"  Global Accuracy matched final: {eval_metric['accuracy']:.4f} and max_acc: {max_acc:.4f}%\n\n")
@@ -158,18 +169,18 @@ def main(args):
         else:
             f.write(f"  Global Accuracy final: {eval_metric['accuracy']:.4f} and max_acc: {max_acc:.4f}%\n\n")
 
-    print(f"Completed {args.method} on {args.dataset} with {args.model_name}. Final Accuracy: {eval_metric['accuracy']:.4f}%")
+    print(f"\nCompleted {args.method} on {args.dataset} with {args.model_name}. Final Accuracy: {eval_metric['accuracy']:.4f}%")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Federated Learning with DoRA/LoRA")
     parser.add_argument("--method", type=str, required=True, 
-                       choices=["base", "fedora", "kd", "muon", "ns", "ns_manifold", 
-                               "fedora+kd", "fedora+muon", "fedora+kd+muon", "kd+muon",
-                               "muon+ns", "muon+ns_manifold"])
+                    choices=["base", "fedora", "kd", "muon", "ns", "ns_manifold", 
+                            "fedora+kd", "fedora+muon", "fedora+kd+muon", "kd+muon",
+                            "muon+ns", "muon+ns_manifold"])
     parser.add_argument("--dataset", type=str, required=True,
-                       choices=["sst2", "qqp", "qnli", "mnli_matched", "mnli_mismatched"])
+                    choices=["sst2", "qqp", "qnli", "mnli_matched", "mnli_mismatched"])
     parser.add_argument("--model_name", type=str, default="roberta-base",
-                       help="Model name from Hugging Face")
+                    help="Model name from Hugging Face")
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--num_rounds", type=int, default=5)
     parser.add_argument("--num_clients", type=int, default=3)
@@ -177,11 +188,11 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.001)
     # Memory optimization parameters
     parser.add_argument("--batch_size", type=int, default=32,
-                       help="Batch size for training and evaluation")
+                    help="Batch size for training and evaluation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
-                       help="Number of steps to accumulate gradients (1 = no accumulation)")
+                    help="Number of steps to accumulate gradients (1 = no accumulation)")
     parser.add_argument("--fp16", action="store_true",
-                       help="Use mixed precision training to reduce memory usage")
+                    help="Use mixed precision training to reduce memory usage")
     parser.add_argument("--output_file", type=str, required=True)
     parser.add_argument("--cuda_device", type=int, default=0)
     # Dynamic port for multi-GPU training with muon

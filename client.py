@@ -81,6 +81,7 @@ class Client():
     def train(self, epochs=2, regularization_strength=1, train_method="base", base_model=None, 
               gradient_accumulation_steps=1, use_fp16=False):
         """Main training method supporting multiple training approaches with memory optimizations"""
+        
         # Initialize distributed training environment if using Muon
         if "muon" in train_method:
             dist.init_process_group(backend='nccl', init_method='env://', world_size=1, rank=0)
@@ -100,8 +101,12 @@ class Client():
 
         # Training loop
         self.model.train()
-        for epoch in range(epochs):
-            for step, batch in enumerate(self.data):
+        total_loss = 0
+        epoch_pbar = tqdm(range(epochs), desc=f"Client {self.client_id} Epochs", leave=True, ncols=100, mininterval=1.0)
+        for epoch in epoch_pbar:
+            epoch_loss = 0
+            batch_iter = tqdm(enumerate(self.data), desc=f"  Training Batch", total=len(self.data), leave=False, ncols=100, mininterval=1.0)
+            for step, batch in batch_iter:
                 batch.to(self.device)
                 
                 # Use autocast for mixed precision if enabled
@@ -151,15 +156,27 @@ class Client():
                             opt.step()
                         for opt in self.optimizers:    
                             opt.zero_grad()
+                
+                # Update progress bar with training stats
+                epoch_loss += loss.item()
+                batch_iter.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'avg_loss': f'{epoch_loss/(step+1):.4f}'
+                })
 
+            total_loss += epoch_loss / len(self.data)
+            
             # Apply orthogonal repair after each epoch if using Newton-Schulz method
             if "ns" in train_method:
                 self.orthogonal_repair(train_method)    
 
+        # Print final training stats
+        final_avg_loss = total_loss / epochs if epochs > 0 else 0
+        print(f"Client {self.client_id} avg loss: {final_avg_loss:.4f}")
+        
         # Clean up distributed training environment
         if "muon" in train_method:
             dist.destroy_process_group()
-
 
     def kd_loss(self, outputs, base_outputs, weighted=0.5):
         """Calculate knowledge distillation loss between student and teacher models"""
@@ -229,7 +246,8 @@ class Client():
         """Evaluate model performance on evaluation dataset"""
         self.model.to(self.device)
         self.model.eval()
-        for step, batch in enumerate(tqdm(eval_dataloader)):
+        eval_iter = tqdm(eval_dataloader, desc=f"Client {self.client_id} Evaluation", leave=False)
+        for step, batch in enumerate(eval_iter):
             batch.to(self.device)
             with torch.no_grad():
                 outputs = model(**batch)
@@ -258,8 +276,12 @@ class Client():
 
         self.model.train()
         base_model.eval()
-        for epoch in range(epochs):
-            for step, batch in enumerate(tqdm(self.data)):
+        total_loss = 0
+        epoch_pbar = tqdm(range(epochs), desc=f"Client {self.client_id} KD Epochs", leave=True, ncols=100, mininterval=1.0)
+        for epoch in epoch_pbar:
+            epoch_loss = 0
+            batch_iter = tqdm(enumerate(self.data), desc=f"    KD Training Batch", total=len(self.data), leave=False, ncols=100, mininterval=1.0)
+            for step, batch in batch_iter:
                 batch.to(self.device)
 
                 # Get teacher model outputs
@@ -273,7 +295,6 @@ class Client():
                 # Calculate orthogonality regularization
                 is_done = False
                 regu_loss = 0
-                num_param = 0
                 for n, p in self.model.named_parameters():
                     if 'base_layer.weight' in n:
                         base = p
@@ -288,14 +309,13 @@ class Client():
                         temp = torch.norm(torch.eye(sqr_matrix.shape[0]).cuda()-sqr_matrix)/sqr_matrix.shape[0]**1.5
                         regu_loss += temp
 
-                        num_param += 1
                         is_done = False
                     
                 # Calculate distillation loss
                 dis_loss = distillation_loss(outputs.logits, base_outputs.logits)
 
                 # Combine losses
-                loss += regularization_strength*regu_loss
+                loss += regularization_strength * regu_loss
                 loss = 0.5*loss + 0.5*dis_loss
 
                 # Add cosine similarity loss if enabled
@@ -312,3 +332,16 @@ class Client():
                 loss.backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
+                
+                # Update progress bar with training stats
+                epoch_loss += loss.item()
+                batch_iter.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'avg_loss': f'{epoch_loss/(step+1):.4f}'
+                })
+                
+            total_loss += epoch_loss / len(self.data)
+            
+        # Print final training stats
+        final_avg_loss = total_loss / epochs if epochs > 0 else 0
+        print(f"Client {self.client_id} KD avg loss: {final_avg_loss:.4f}")

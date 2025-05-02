@@ -53,7 +53,8 @@ class Server:
         # torch.cuda.current_device()
         self.global_model.to(self.device)
         self.global_model.eval()
-        for step, batch in enumerate(tqdm(eval_dataloader)):
+        eval_iter = tqdm(eval_dataloader, desc="Global Evaluation", leave=False, ncols=100, mininterval=1.0)
+        for step, batch in enumerate(eval_iter):
             batch.to(self.device)
             with torch.no_grad():
                 outputs = self.global_model(**batch)
@@ -65,4 +66,5 @@ class Server:
             )
         
         eval_metric = metric.compute()
+        tqdm.write(f"Global Evaluation Result: {eval_metric}")
         return eval_metric
