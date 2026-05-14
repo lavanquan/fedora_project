@@ -98,14 +98,14 @@ class Client():
         self.optimizers = []
         if muon_params:
             if "muon" in train_method:
-                self.optimizers.append(Muon(muon_params, lr=3e-4, momentum=0.95))
+                self.optimizers.append(Muon(muon_params, lr=2e-5, momentum=0.95))
             else:
-                self.optimizers.append(torch.optim.AdamW(muon_params, lr=3e-4))
+                self.optimizers.append(torch.optim.AdamW(muon_params, lr=2e-5))
         else:
             print("Warning: No parameters for Muon optimizer")
         
         if adamw_params:
-            self.optimizers.append(torch.optim.AdamW(adamw_params, lr=3e-4))
+            self.optimizers.append(torch.optim.AdamW(adamw_params, lr=2e-5))
         else:
             print("Warning: No parameters for AdamW optimizer")
 

@@ -14,7 +14,7 @@ RANK=4
 LR=3e-4
 OUTPUT_DIR="results"
 CUDA_DEVICE="0"
-MODEL_NAME="roberta-large"  # Có thể thay đổi
+MODEL_NAME="roberta-base"  # Có thể thay đổi
 
 mkdir -p $OUTPUT_DIR
 
